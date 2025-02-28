@@ -178,15 +178,24 @@ def remove_favorite(book_id):
     """Remove a book from favorites"""
     user_id = get_jwt_identity()
     user = User.query.get(user_id)
-    book = Book.query.get(book_id)
 
-    if not book or book not in user.favorites:
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    # Find the favorite entry
+    favorite_entry = Favorite.query.filter_by(user_id=user.id, book_id=book_id).first()
+
+    if not favorite_entry:
         return jsonify({"error": "Book not found in favorites"}), 404
 
-    user.favorites.remove(book)
-    db.session.commit()
-    
-    return jsonify({"message": "Book removed from favorites"}), 200
+    try:
+        db.session.delete(favorite_entry)
+        db.session.commit()
+        return jsonify({"message": "Book removed from favorites"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": "An error occurred while removing the book"}), 500
+
 
 # --------- READING HISTORY ROUTES ---------
 
