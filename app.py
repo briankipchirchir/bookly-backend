@@ -4,6 +4,8 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
 )
+from flask_jwt_extended.exceptions import NoAuthorizationError, JWTDecodeError, InvalidHeaderError
+
 from flask_cors import CORS,cross_origin
 from flask_migrate import Migrate
 from models import db, User, bcrypt, ReadingHistory, Book,Favorite
@@ -196,27 +198,41 @@ def remove_favorite(book_id):
         db.session.rollback()
         return jsonify({"error": "An error occurred while removing the book"}), 500
 
-
-# --------- READING HISTORY ROUTES ---------
-
 @app.route("/history", methods=["POST"])
 @jwt_required()
 def add_to_history():
-    """Add a book to user's reading history"""
-    data = request.json
-    user_id = get_jwt_identity()
+    try:
+        user_id = get_jwt_identity()
+        print("🔍 User ID from JWT:", user_id)  # Debugging
 
-    book_id = data.get("book_id")
+        data = request.json
+        book_id = data.get("book_id")
 
-    if not book_id:
-        return jsonify({"error": "Book ID is required"}), 400
+        if not book_id:
+            return jsonify({"error": "Book ID is required"}), 400
 
-    # Remove the local book check, since books are fetched from an external API
-    history_entry = ReadingHistory(user_id=user_id, book_id=book_id)
-    db.session.add(history_entry)
-    db.session.commit()
+        # Prevent duplicates
+        existing_entry = ReadingHistory.query.filter_by(user_id=user_id, book_id=book_id).first()
+        if existing_entry:
+            return jsonify({"error": "Book is already in reading history"}), 400
 
-    return jsonify({"message": "Book added to reading history"}), 201
+        history_entry = ReadingHistory(user_id=user_id, book_id=book_id)
+        db.session.add(history_entry)
+        db.session.commit()
+
+        return jsonify({"message": "Book added to reading history"}), 201
+
+    except NoAuthorizationError:
+        print("❌ JWT ERROR: No authorization token found")
+        return jsonify({"error": "No authorization token"}), 401
+
+    except JWTDecodeError:
+        print("❌ JWT ERROR: Invalid or expired token")
+        return jsonify({"error": "Invalid or expired token"}), 401
+
+    except InvalidHeaderError:
+        print("❌ JWT ERROR: Invalid token header")
+        return jsonify({"error": "Invalid token header"}), 401
 
 @app.route("/history", methods=["GET"])
 @jwt_required()
@@ -397,6 +413,21 @@ def generate_reports():
 
     # Send the generated PDF as a response
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
+@app.route('/leaderboard', methods=['GET'])
+def get_leaderboard():
+    users = User.query.all()
+    leaderboard = [
+        {
+            "id": user.id,
+            "username": user.username,
+            "books_read": len(user.reading_history),
+        }
+        for user in users
+    ]
+    leaderboard.sort(key=lambda x: x["books_read"], reverse=True)
+    return jsonify(leaderboard), 200
+
 
 
 
