@@ -17,6 +17,11 @@ class User(db.Model):
 
     # One-to-Many: A user can have multiple reading history entries
     reading_history = db.relationship('ReadingHistory', back_populates='user', cascade="all, delete-orphan")
+      # One-to-Many: User can create topics and replies
+    topics = db.relationship('Topic', back_populates='user', cascade="all, delete-orphan")
+    replies = db.relationship('Reply', back_populates='user', cascade="all, delete-orphan")
+
+   
 
     def set_password(self, password):
         """Hash password before storing"""
@@ -64,3 +69,51 @@ class ReadingHistory(db.Model):
     # Relationships
     user = db.relationship('User', back_populates='reading_history')
     book = db.relationship('Book', back_populates='reading_history_entries')
+
+
+class Topic(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+    replies = db.relationship('Reply', back_populates='topic', cascade="all, delete-orphan")
+    
+
+    user = db.relationship('User', back_populates='topics')
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "content": self.content,
+            "created_at": self.created_at,
+            "user": {"id": self.user.id, "username": self.user.username},
+            "replies": [reply.to_dict() for reply in self.replies],
+            
+        }
+
+class Reply(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    topic_id = db.Column(db.Integer, db.ForeignKey('topic.id'), nullable=False)
+
+    
+
+    user = db.relationship('User', back_populates='replies')
+    topic = db.relationship('Topic', back_populates='replies')
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "content": self.content,
+            "created_at": self.created_at,
+            "user": {"id": self.user.id, "username": self.user.username},
+            
+        }
+

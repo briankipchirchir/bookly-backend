@@ -8,7 +8,7 @@ from flask_jwt_extended.exceptions import NoAuthorizationError, JWTDecodeError, 
 
 from flask_cors import CORS,cross_origin
 from flask_migrate import Migrate
-from models import db, User, bcrypt, ReadingHistory, Book,Favorite,Topic,Reply
+from models import db, User, bcrypt, ReadingHistory, Book,Favorite
 from flask_socketio import SocketIO, send, emit, join_room, leave_room
 import re
 from datetime import datetime
@@ -307,8 +307,7 @@ def handle_message(data):
     print(f"Message from {username} in {room}: {message}")
 
     # Broadcast message to all users in the room
-    emit('new_message', {'username': username, 'message': message}, room=room)
-
+    emit('new_message', {'username': username, 'message': message}, room=room, broadcast=True)
 @app.route("/admin/users", methods=["GET"])
 def get_all_users():
     """Retrieve all users (Open to Everyone)"""
@@ -430,196 +429,10 @@ def get_leaderboard():
     return jsonify(leaderboard), 200
 
 
-@app.route('/topics', methods=['POST'])
-@jwt_required()
-def create_topic():
-    """Create a new topic and broadcast it to all users"""
-    user_id = get_jwt_identity()
-    data = request.get_json()
-
-    title = data.get("title")
-    content = data.get("content")
-
-    if not title or not content:
-        return jsonify({"error": "Title and content are required"}), 400
-
-    new_topic = Topic(title=title, content=content, user_id=user_id)
-    db.session.add(new_topic)
-    db.session.commit()
-
-    topic_data = new_topic.to_dict()  # Convert the topic to JSON format
-
-    for key, value in topic_data.items():
-       if isinstance(value, datetime):
-        topic_data[key] = value.isoformat()
-
-    # **Emit topic to all connected users**
-    socketio.emit("new_topic", topic_data, to="general")  # Adjust "general" to your actual room name
-
-
-    return jsonify({
-        "message": "Topic created successfully",
-        "topic": topic_data
-    }), 201
-
-
-
-@app.route('/topics', methods=['GET'])
-def get_topics():
-    """Retrieve all topics"""
-    topics = Topic.query.all()
-    topics_list = []
-
-    for topic in topics:
-        # Fetch the user associated with the topic
-        user = User.query.get(topic.user_id)
-        username = user.username if user else "Unknown"  # If user is not found, set to 'Unknown'
-
-        topics_list.append({
-            "id": topic.id,
-            "title": topic.title,
-            "content": topic.content,
-            "user_id": topic.user_id,
-            "username": username,  # Add username to the response
-            "created_at": topic.created_at
-        })
-
-    return jsonify(topics_list)
-
-
-@app.route('/topics/<int:topic_id>', methods=['GET'])
-def get_topic(topic_id):
-    topic = Topic.query.get(topic_id)
-    if not topic:
-        return jsonify({"error": "Topic not found"}), 404
-    
-    # Get the user object based on user_id
-    user = User.query.get(topic.user_id)
-    username = user.username if user else "Unknown"  # If user not found, return 'Unknown'
-
-    return jsonify({
-        "id": topic.id,
-        "title": topic.title,
-        "content": topic.content,
-        "user_id": topic.user_id,
-        "username": username,  # Include the username here
-        "created_at": topic.created_at
-    })
-
-
-
-@app.route('/topics/<int:topic_id>', methods=['DELETE'])
-@jwt_required()
-def delete_topic(topic_id):
-    """Delete a topic if the authenticated user is the owner"""
-    user_id = get_jwt_identity()  # Get the logged-in user's ID
-
-    # Debugging (you can remove this later)
-    print(f"Authenticated user: {user_id} (type: {type(user_id)})")
-
-    topic = Topic.query.filter_by(id=topic_id, user_id=user_id).first()  # Ensure topic belongs to user
-
-    if not topic:
-        return jsonify({"error": "Topic not found or unauthorized"}), 404  # Combined check
-
-    db.session.delete(topic)
-    db.session.commit()
-
-    return jsonify({"message": "Topic deleted successfully"}), 200
-
-
-
-
-
-@app.route('/topics/<int:topic_id>/replies', methods=['POST'])
-@jwt_required()
-def add_reply(topic_id):
-    """Add a reply to a topic"""
-    user_id = get_jwt_identity()
-    data = request.get_json()
-
-    content = data.get("content")
-
-    if not content:
-        return jsonify({"error": "Content is required"}), 400
-
-    topic = Topic.query.get(topic_id)
-    if not topic:
-        return jsonify({"error": "Topic not found"}), 404
-
-    user = User.query.get(user_id)  # Fetch user details
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-
-    new_reply = Reply(content=content, user_id=user_id, topic_id=topic_id)
-    db.session.add(new_reply)
-    db.session.commit()
-
-    return jsonify({
-        "message": "Reply added successfully",
-        "reply": {
-            "id": new_reply.id,
-            "content": new_reply.content,
-            "username": user.username,  # Include username
-            "topic_id": new_reply.topic_id,
-            "created_at": new_reply.created_at.strftime("%Y-%m-%d %H:%M:%S")  # Format timestamp
-        }
-    }), 201
-
-
-
-@app.route('/topics/<int:topic_id>/replies', methods=['GET'])
-def get_replies(topic_id):
-    """Retrieve all replies for a topic"""
-    replies = Reply.query.filter_by(topic_id=topic_id).all()
-
-    return jsonify([{
-        "id": reply.id,
-        "content": reply.content,
-        "username": reply.user.username,
-        "topic_id": reply.topic_id,
-        "created_at": reply.created_at
-    } for reply in replies])
-
-
-@app.route('/replies/<int:reply_id>', methods=['DELETE'])
-@jwt_required()
-def delete_reply(reply_id):
-    """Delete a reply"""
-    user_id = get_jwt_identity()
-    print(f"JWT User ID: {user_id}")  # Debugging print
-
-    reply = Reply.query.get(reply_id)
-    
-    if not reply:
-        print("Reply not found")
-        return jsonify({"error": "Reply not found"}), 404
-
-    print(f"Reply belongs to User ID: {reply.user_id}")  # Debugging print
-
-    if reply.user_id != int(user_id):  # Ensure correct type comparison
-        print("Unauthorized: User ID does not match reply owner")
-        return jsonify({"error": "Unauthorized"}), 403
-
-    db.session.delete(reply)
-    db.session.commit()
-
-    print("Reply deleted successfully")
-    return jsonify({"message": "Reply deleted successfully"}), 200
-
-
-
-
-
-
-
-
-
-
 
 
 
 
 # Run the Flask app
 if __name__ == "__main__":
-    socketio.run(app, debug=True, allow_unsafe_werkzeug=True)
+    app.run(debug=True)
