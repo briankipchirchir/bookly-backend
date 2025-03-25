@@ -1,5 +1,5 @@
 
-from flask import Flask, request, jsonify,make_response,send_file
+from flask import Flask, request, jsonify,make_response,send_file,after_this_request
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required, get_jwt_identity
@@ -15,6 +15,7 @@ from datetime import datetime
 from reportlab.pdfgen import canvas
 import os
 from reportlab.lib.pagesizes import letter 
+from datetime import timedelta
 
 
 
@@ -30,6 +31,7 @@ CORS(app, supports_credentials=True)  # Apply CORS globally
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///bookly.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = 'supersecretkey'  # Change this in production
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
 
 # Initialize Database & JWT
 db.init_app(app)
@@ -341,27 +343,46 @@ def remove_user(user_id):
 @app.route("/admin/reports", methods=["GET"])
 def generate_reports():
     """Generate a detailed user activity report and return a PDF"""
-    
+
     # Fetch all users with their details
     users = User.query.all()
 
     # Define the PDF file path
     pdf_path = "detailed_user_report.pdf"
     
-    # Create PDF file
+    # Create PDF
     c = canvas.Canvas(pdf_path, pagesize=letter)
-    width, height = letter  # Get page size
-    y_position = height - 50  # Start position for writing text
+    width, height = letter
+    y_position = height - 50  # Start position
 
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(200, y_position, "Detailed User Activity Report")
+    # Report Title
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(180, y_position, "Bookly User Activity Report")
+    y_position -= 30
+    c.setFont("Helvetica", 12)
+    c.drawString(50, y_position, f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
     y_position -= 30
 
-    # Loop through each user and fetch their data
+    # Summary Section
+    total_users = len(users)
+    total_books_read = sum(len(user.reading_history) for user in users)
+    total_favorites = sum(len(user.favorites) for user in users)
+
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, y_position, "Report Summary:")
+    y_position -= 20
+    c.setFont("Helvetica", 10)
+    c.drawString(70, y_position, f"Total Users: {total_users}")
+    y_position -= 15
+    c.drawString(70, y_position, f"Total Books Read: {total_books_read}")
+    y_position -= 15
+    c.drawString(70, y_position, f"Total Books Favorited: {total_favorites}")
+    y_position -= 30
+
+    # Loop through each user and add details
     for user in users:
-        # User details
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(50, y_position, f"User: {user.username}")
+        c.drawString(50, y_position, f"User: {user.username} (ID: {user.id})")
         y_position -= 20
         c.setFont("Helvetica", 10)
         c.drawString(70, y_position, f"Email: {user.email}")
@@ -386,25 +407,25 @@ def generate_reports():
             y_position -= 15
 
         # User's Reading History
-        reading_history = [record.book.title for record in user.reading_history if record.book]
-
-        if reading_history:
+        if user.reading_history:
             c.setFont("Helvetica-Bold", 11)
             c.drawString(70, y_position, "Reading History:")
             y_position -= 15
             c.setFont("Helvetica", 10)
-            for book in reading_history:
-                c.drawString(90, y_position, f"- {book}")
+            for record in user.reading_history:
+                book_title = record.book.title if record.book else "Unknown"
+                read_date = record.timestamp.strftime('%Y-%m-%d %H:%M') if record.timestamp else "Unknown"
+                c.drawString(90, y_position, f"- {book_title} (Read on: {read_date})")
                 y_position -= 15
         else:
             c.drawString(70, y_position, "No Reading History")
             y_position -= 15
 
         # Add spacing between users
-        y_position -= 20
-        if y_position < 50:  # If the page is full, create a new page
+        y_position -= 30
+        if y_position < 50:
             c.showPage()
-            y_position = height - 50  # Reset position for new page
+            y_position = height - 50
 
     c.save()  # Save the PDF
 
@@ -414,6 +435,103 @@ def generate_reports():
 
     # Send the generated PDF as a response
     return send_file(pdf_path, as_attachment=True, mimetype='application/pdf')
+
+@app.route("/admin/reports/user/<int:user_id>", methods=["GET"])
+def generate_single_user_report(user_id):
+    """Generate a report for a specific user"""
+
+    # Fetch user by ID
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    # Define absolute PDF file path
+    pdf_path = os.path.join(os.getcwd(), f"user_report_{user_id}.pdf")
+
+    # Create PDF
+    c = canvas.Canvas(pdf_path, pagesize=letter)
+    width, height = letter
+    y_position = height - 50  # Start position
+
+    # Report Title
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(180, y_position, "Activity Report")
+    y_position -= 30
+    c.setFont("Helvetica", 12)
+    c.drawString(50, y_position, f"Generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
+    y_position -= 30
+
+    # User Details
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, y_position, f"User: {user.username} (ID: {user.id})")
+    y_position -= 20
+    c.setFont("Helvetica", 10)
+    c.drawString(70, y_position, f"Email: {user.email}")
+    y_position -= 15
+    joined_at = user.joined_at.strftime('%Y-%m-%d') if user.joined_at else "N/A"
+    c.drawString(70, y_position, f"Joined: {joined_at}")
+    y_position -= 30
+
+     # Count Favorite Books & Books Read
+    num_favorites = len(user.favorites) if user.favorites else 0
+    num_books_read = len(user.reading_history) if user.reading_history else 0
+    c.drawString(70, y_position, f"Number of Favorite Books: {num_favorites}")
+    y_position -= 15
+    c.drawString(70, y_position, f"Number of Books Read: {num_books_read}")
+    y_position -= 30  # Extra space before next section
+
+    # User's Favorite Books
+    favorite_books = [fav.book.title for fav in user.favorites] if user.favorites else []
+    if favorite_books:
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(50, y_position, "Favorite Books:")
+        y_position -= 20
+        c.setFont("Helvetica", 10)
+        for book in favorite_books:
+            c.drawString(70, y_position, f"- {book}")
+            y_position -= 15
+    else:
+        c.setFont("Helvetica-Italic", 10)
+        c.drawString(50, y_position, "No Favorite Books")
+        y_position -= 15
+
+    y_position -= 10  # Space before next section
+
+    # User's Reading History
+    reading_history = user.reading_history if user.reading_history else []
+    if reading_history:
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(50, y_position, "Reading History:")
+        y_position -= 20
+        c.setFont("Helvetica", 10)
+        for record in reading_history:
+            book_title = record.book.title if record.book else "Unknown Book"
+            read_date = record.timestamp.strftime('%Y-%m-%d %H:%M') if record.timestamp else "Unknown Date"
+            c.drawString(70, y_position, f"- {book_title} (Read on: {read_date})")
+            y_position -= 15
+    else:
+        c.setFont("Helvetica-Italic", 10)
+        c.drawString(50, y_position, "No Reading History")
+        y_position -= 15
+
+    c.save()  # Save PDF
+
+    # Ensure PDF exists
+    if not os.path.exists(pdf_path):
+        print("PDF file not found!")  # Debugging log
+        return jsonify({"error": "PDF generation failed"}), 500
+
+    # Register cleanup after request
+    @after_this_request
+    def remove_file(response):
+        try:
+            os.remove(pdf_path)
+        except Exception as e:
+            print(f"Error deleting file: {e}")  # Debugging log
+        return response
+
+    # Send the generated PDF
+    return send_file(pdf_path, mimetype="application/pdf", as_attachment=True, download_name=f"user_report_{user_id}.pdf")
 
 @app.route('/leaderboard', methods=['GET'])
 def get_leaderboard():
