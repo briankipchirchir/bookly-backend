@@ -53,6 +53,10 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return response
 
+@app.route('/')
+def home():
+    return "Welcome to Bookly!"
+
 
 # Signup Route
 @app.route('/signup', methods=['POST'])
